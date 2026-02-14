@@ -33,7 +33,7 @@ const BLOCK_W = 0.005;   // ~0.005° longitude ≈ 440 m
 const BLOCK_H = 0.0015;  // ~0.0015° latitude  ≈ 167 m
 const COLS = 4;
 
-function blockGeometry(index: number): GeoJSON.Polygon {
+function defaultBlockGeometry(index: number): GeoJSON.Polygon {
   const col = index % COLS;
   const row = Math.floor(index / COLS);
   const west = CENTER[0] - (COLS / 2) * BLOCK_W + col * BLOCK_W;
@@ -48,7 +48,21 @@ function blockGeometry(index: number): GeoJSON.Polygon {
   };
 }
 
-function sensorLatLng(index: number): { lat: number; lng: number } {
+/** Generate a block polygon centered on a sensor position. */
+function blockGeometryFromPosition(lng: number, lat: number): GeoJSON.Polygon {
+  const hw = BLOCK_W / 2;
+  const hh = BLOCK_H / 2;
+  return {
+    type: "Polygon",
+    coordinates: [[
+      [lng - hw, lat + hh], [lng + hw, lat + hh],
+      [lng + hw, lat - hh], [lng - hw, lat - hh],
+      [lng - hw, lat + hh],
+    ]],
+  };
+}
+
+function defaultSensorLatLng(index: number): { lat: number; lng: number } {
   const col = index % COLS;
   const row = Math.floor(index / COLS);
   return {
@@ -166,6 +180,35 @@ export interface SensorSnapshot {
   ts: number;
 }
 
+/** Sensor position override — stored by sensor_id */
+export interface SensorPosition {
+  sensor_id: string;
+  lat: number;
+  lng: number;
+}
+
+const POSITIONS_KEY = "sensor_positions";
+
+/** Load custom positions from localStorage. */
+export function loadPositions(): Map<string, { lat: number; lng: number }> {
+  const map = new Map<string, { lat: number; lng: number }>();
+  try {
+    const raw = localStorage.getItem(POSITIONS_KEY);
+    if (raw) {
+      const arr: SensorPosition[] = JSON.parse(raw);
+      arr.forEach((p) => map.set(p.sensor_id, { lat: p.lat, lng: p.lng }));
+    }
+  } catch { /* ignore */ }
+  return map;
+}
+
+/** Save custom positions to localStorage. */
+export function savePositions(positions: Map<string, { lat: number; lng: number }>): void {
+  const arr: SensorPosition[] = [];
+  positions.forEach(({ lat, lng }, sensor_id) => arr.push({ sensor_id, lat, lng }));
+  localStorage.setItem(POSITIONS_KEY, JSON.stringify(arr));
+}
+
 /**
  * Stateful store that accumulates ProcessedMessages and
  * produces Block[] / Sensor[] / Reading[] snapshots for the UI.
@@ -174,6 +217,25 @@ export class LiveStore {
   private sensorIndex = new Map<string, number>();   // sensor_id → positional index
   private latest = new Map<string, SensorSnapshot>();
   private nextIndex = 0;
+  public positions = new Map<string, { lat: number; lng: number }>();
+
+  constructor() {
+    if (typeof window !== "undefined") {
+      this.positions = loadPositions();
+    }
+  }
+
+  /** Set a custom position for a sensor. */
+  setSensorPosition(sensorId: string, lat: number, lng: number): void {
+    this.positions.set(sensorId, { lat, lng });
+    savePositions(this.positions);
+
+    // Register the sensor in the index so it appears on the map immediately,
+    // even before any MQTT data arrives.
+    if (!this.sensorIndex.has(sensorId)) {
+      this.sensorIndex.set(sensorId, this.nextIndex++);
+    }
+  }
 
   /** Ingest one processed MQTT message. */
   ingest(msg: ProcessedMessage): void {
@@ -195,18 +257,24 @@ export class LiveStore {
     const blocks: Block[] = [];
     this.sensorIndex.forEach((idx, sensorId) => {
       const snap = this.latest.get(sensorId);
-      if (!snap) return;
 
-      const moistureNow = normaliseMoisture(snap.filtered);
-      const moistureRaw = normaliseMoisture(snap.raw);
+      // Pending sensor — no data yet. Show a placeholder block.
+      const moistureNow = snap ? normaliseMoisture(snap.filtered) : 0.5;
+      const moistureRaw = snap ? normaliseMoisture(snap.raw) : 0.5;
+      const status = snap?.status ?? "OK";
+      const health = snap?.health ?? [];
+      const noiseScore = snap?.noiseScore ?? 0;
+
       const { decision, reason, riskFlags, confidence } = deriveDecision(
-        moistureNow, snap.status, snap.health, snap.noiseScore,
+        moistureNow, status, health, noiseScore,
       );
 
       blocks.push({
         id: `block-${sensorId}`,
         name: `Sensor ${sensorId}`,
-        geometry: blockGeometry(idx),
+        geometry: this.positions.has(sensorId)
+          ? blockGeometryFromPosition(this.positions.get(sensorId)!.lng, this.positions.get(sensorId)!.lat)
+          : defaultBlockGeometry(idx),
         soil_type: SOIL_TYPES[idx % SOIL_TYPES.length],
         moisture_now: moistureNow,
         moisture_raw: moistureRaw,
@@ -214,7 +282,9 @@ export class LiveStore {
         decision,
         reason,
         risk_flags: riskFlags,
-        last_updated: new Date(snap.ts * 1000).toISOString(),
+        last_updated: snap
+          ? new Date(snap.ts * 1000).toISOString()
+          : new Date().toISOString(),
         weather: DEFAULT_WEATHER,
         crop: defaultCrop(idx),
         irrigation: defaultIrrigation(),
@@ -229,14 +299,15 @@ export class LiveStore {
     const sensors: Sensor[] = [];
     this.sensorIndex.forEach((idx, sensorId) => {
       const snap = this.latest.get(sensorId);
-      const { lat, lng } = sensorLatLng(idx);
+      const pos = this.positions.get(sensorId) ?? defaultSensorLatLng(idx);
       sensors.push({
         sensor_id: sensorId,
         type: "soil",
-        lat,
-        lng,
+        lat: pos.lat,
+        lng: pos.lng,
         block_id: `block-${sensorId}`,
-        status: snap && snap.health.includes("STALE") ? "offline" : "online",
+        status: !snap ? "pending"
+          : snap.health.includes("STALE") ? "offline" : "online",
       });
     });
     return sensors;
@@ -260,5 +331,10 @@ export class LiveStore {
 
   get sensorCount(): number {
     return this.sensorIndex.size;
+  }
+
+  /** Check if a sensor_id is already registered. */
+  hasSensor(sensorId: string): boolean {
+    return this.sensorIndex.has(sensorId);
   }
 }

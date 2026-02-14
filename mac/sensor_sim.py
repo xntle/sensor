@@ -20,6 +20,11 @@ import socket
 import threading
 import time
 
+try:
+    import paho.mqtt.client as mqtt
+except ImportError:
+    mqtt = None  # MQTT command channel is optional
+
 
 # ---------------------------------------------------------------------------
 # Sensor model
@@ -123,6 +128,10 @@ def main():
                         help="Hub UDP listen address (default: 127.0.0.1)")
     parser.add_argument("--hub-port", type=int, default=9900,
                         help="Hub UDP listen port (default: 9900)")
+    parser.add_argument("--broker", default=None,
+                        help="MQTT broker for command channel (enables dynamic sensor creation)")
+    parser.add_argument("--broker-port", type=int, default=1883,
+                        help="MQTT broker port (default: 1883)")
     args = parser.parse_args()
 
     hub_addr = (args.hub_host, args.hub_port)
@@ -131,6 +140,7 @@ def main():
 
     sensors = []
     threads = []
+    next_sensor_idx = args.num_sensors  # for generating unique IDs
 
     print(f"[sensor_sim] Spawning {args.num_sensors} sensors → hub at {hub_addr}  @ {args.rate} Hz")
 
@@ -144,6 +154,54 @@ def main():
                              daemon=True, name=f"sensor-{sid}")
         t.start()
         threads.append(t)
+
+    # ── MQTT command channel for dynamic sensor creation ──────────────
+    def spawn_sensor(sensor_id: str, baseline: float = 500.0):
+        """Create and start a new sensor at runtime."""
+        nonlocal next_sensor_idx
+        s = VirtualSensor(sensor_id=sensor_id, baseline=baseline)
+        sensors.append(s)
+        t = threading.Thread(target=sensor_loop, args=(s, args.rate, udp_sock, hub_addr, stop),
+                             daemon=True, name=f"sensor-{sensor_id}")
+        t.start()
+        threads.append(t)
+        next_sensor_idx += 1
+        print(f"[sensor_sim] ✚ Spawned new sensor: {sensor_id} (baseline={baseline:.0f})")
+
+    if args.broker and mqtt:
+        def on_connect(client, userdata, flags, reason_code, properties=None):
+            if reason_code == 0:
+                client.subscribe("irrigation/command/#", qos=0)
+                print(f"[sensor_sim] MQTT command channel connected → {args.broker}")
+            else:
+                print(f"[sensor_sim] MQTT connect failed: {reason_code}")
+
+        def on_message(client, userdata, msg):
+            try:
+                payload = json.loads(msg.payload)
+            except json.JSONDecodeError:
+                return
+
+            if msg.topic == "irrigation/command/create":
+                sid = payload.get("sensor_id")
+                if not sid:
+                    sid = f"zone{next_sensor_idx:02d}"
+                baseline = payload.get("baseline", random.uniform(350, 650))
+                # Don't create duplicates
+                existing_ids = {s.sensor_id for s in sensors}
+                if sid in existing_ids:
+                    print(f"[sensor_sim] Sensor {sid} already exists, skipping")
+                    return
+                spawn_sensor(sid, baseline)
+
+        mclient = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2,
+                              client_id="sensor-sim-cmd", protocol=mqtt.MQTTv311)
+        mclient.on_connect = on_connect
+        mclient.on_message = on_message
+        mclient.connect(args.broker, args.broker_port, keepalive=60)
+        mclient.loop_start()
+    elif args.broker and not mqtt:
+        print("[sensor_sim] ⚠ paho-mqtt not installed — command channel disabled")
 
     try:
         while True:

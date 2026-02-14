@@ -72,5 +72,13 @@ export function useMQTT({ brokerUrl, topic = "irrigation/processed/#" }: UseMQTT
     };
   }, [brokerUrl, topic]);
 
-  return { connected, subscribe };
+  // Publish a message to any topic
+  const publish = useCallback((pubTopic: string, payload: Record<string, unknown>) => {
+    const client = clientRef.current;
+    if (client && connected) {
+      client.publish(pubTopic, JSON.stringify(payload), { qos: 0 });
+    }
+  }, [connected]);
+
+  return { connected, subscribe, publish };
 }

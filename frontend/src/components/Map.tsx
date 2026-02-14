@@ -8,12 +8,17 @@ import {
   sensorsToGeoJSON,
 } from "@/data/mock";
 
+export type EditMode = "none" | "drag" | "add";
+
 interface MapProps {
   blocks: Block[];
   sensors: Sensor[];
   layerMode: LayerMode;
   onBlockSelect: (blockId: string | null) => void;
   selectedBlockId: string | null;
+  editMode?: EditMode;
+  onSensorMove?: (sensorId: string, lat: number, lng: number) => void;
+  onSensorAdd?: (lat: number, lng: number) => void;
 }
 
 // Paint expressions for each layer mode
@@ -79,11 +84,21 @@ export default function MapView({
   layerMode,
   onBlockSelect,
   selectedBlockId,
+  editMode = "none",
+  onSensorMove,
+  onSensorAdd,
 }: MapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const onBlockSelectRef = useRef(onBlockSelect);
   onBlockSelectRef.current = onBlockSelect;
+  const onSensorMoveRef = useRef(onSensorMove);
+  onSensorMoveRef.current = onSensorMove;
+  const onSensorAddRef = useRef(onSensorAdd);
+  onSensorAddRef.current = onSensorAdd;
+  const editModeRef = useRef(editMode);
+  editModeRef.current = editMode;
+  const draggingRef = useRef<string | null>(null);
 
   const initMap = useCallback(() => {
     if (!containerRef.current || mapRef.current) return;
@@ -226,13 +241,57 @@ export default function MapView({
         map.getCanvas().style.cursor = "";
       });
 
-      // Click outside blocks to deselect
+      // Click outside blocks to deselect, or add sensor in add mode
       map.on("click", (e) => {
+        if (editModeRef.current === "add") {
+          onSensorAddRef.current?.(e.lngLat.lat, e.lngLat.lng);
+          return;
+        }
         const features = map.queryRenderedFeatures(e.point, {
           layers: ["blocks-fill"],
         });
         if (features.length === 0) {
           onBlockSelectRef.current(null);
+        }
+      });
+
+      // ── Drag-to-move sensors ──────────────────────────────────
+      map.on("mousedown", "sensors-circle", (e) => {
+        if (editModeRef.current !== "drag") return;
+        if (!e.features || e.features.length === 0) return;
+        e.preventDefault();
+        const sid = e.features[0].properties?.sensor_id;
+        if (!sid) return;
+        draggingRef.current = sid;
+        map.getCanvas().style.cursor = "grabbing";
+      });
+
+      map.on("mousemove", (e) => {
+        if (!draggingRef.current) return;
+        map.getCanvas().style.cursor = "grabbing";
+        // Live preview: update the sensor point position while dragging
+        const src = map.getSource("sensors") as mapboxgl.GeoJSONSource | undefined;
+        if (!src) return;
+        // We just keep cursor feedback; position update happens on mouseup
+      });
+
+      map.on("mouseup", (e) => {
+        if (!draggingRef.current) return;
+        const sid = draggingRef.current;
+        draggingRef.current = null;
+        map.getCanvas().style.cursor = "";
+        onSensorMoveRef.current?.(sid, e.lngLat.lat, e.lngLat.lng);
+      });
+
+      // Cursor hints for edit modes
+      map.on("mouseenter", "sensors-circle", () => {
+        if (editModeRef.current === "drag") {
+          map.getCanvas().style.cursor = "grab";
+        }
+      });
+      map.on("mouseleave", "sensors-circle", () => {
+        if (!draggingRef.current) {
+          map.getCanvas().style.cursor = editModeRef.current === "add" ? "crosshair" : "";
         }
       });
     });
@@ -248,6 +307,17 @@ export default function MapView({
       mapRef.current = null;
     };
   }, [initMap]);
+
+  // Update cursor for edit mode
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (editMode === "add") {
+      map.getCanvas().style.cursor = "crosshair";
+    } else if (editMode === "none") {
+      map.getCanvas().style.cursor = "";
+    }
+  }, [editMode]);
 
   // Update layer mode
   useEffect(() => {

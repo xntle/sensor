@@ -1,11 +1,13 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import MapView from "@/components/Map";
+import type { EditMode } from "@/components/Map";
 import TopControls from "@/components/TopControls";
 import Legend from "@/components/Legend";
 import BlockPanel from "@/components/BlockPanel";
 import ChatBot from "@/components/ChatBot";
+import SensorControls from "@/components/SensorControls";
 import type { LayerMode, TimeRange, Block, Sensor, Reading } from "@/types";
 import { blocks as mockBlocks, sensors as mockSensors, readings as mockReadings } from "@/data/mock";
 import { useMQTT } from "@/hooks/useMQTT";
@@ -17,6 +19,7 @@ export default function Home() {
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
   const [layerMode, setLayerMode] = useState<LayerMode>("decision");
   const [timeRange, setTimeRange] = useState<TimeRange>("now");
+  const [editMode, setEditMode] = useState<EditMode>("none");
 
   // Live data state
   const [blocks, setBlocks] = useState<Block[]>(mockBlocks);
@@ -25,7 +28,7 @@ export default function Home() {
   const [isLive, setIsLive] = useState(false);
 
   const storeRef = useRef(new LiveStore());
-  const { connected, subscribe } = useMQTT({ brokerUrl: BROKER_URL });
+  const { connected, subscribe, publish } = useMQTT({ brokerUrl: BROKER_URL });
 
   // When MQTT messages arrive, ingest and update state
   useEffect(() => {
@@ -44,6 +47,48 @@ export default function Home() {
     return unsub;
   }, [subscribe, isLive]);
 
+  // Refresh UI from store (after position changes)
+  const refreshFromStore = useCallback(() => {
+    const store = storeRef.current;
+    if (store.sensorCount > 0) {
+      setBlocks(store.getBlocks());
+      setSensors(store.getSensors());
+      setReadings(store.getReadings());
+    }
+  }, []);
+
+  // Handle sensor drag-move
+  const handleSensorMove = useCallback((sensorId: string, lat: number, lng: number) => {
+    storeRef.current.setSensorPosition(sensorId, lat, lng);
+    refreshFromStore();
+  }, [refreshFromStore]);
+
+  // Handle click-to-add: creates an entirely new sensor via MQTT command
+  const nextSensorIdRef = useRef(10); // start after zone00–zone09
+  const handleSensorAdd = useCallback((lat: number, lng: number) => {
+    // Advance past any IDs that already exist in the store
+    const store = storeRef.current;
+    while (store.hasSensor(`zone${String(nextSensorIdRef.current).padStart(2, "0")}`)) {
+      nextSensorIdRef.current += 1;
+    }
+
+    const sensorId = `zone${String(nextSensorIdRef.current).padStart(2, "0")}`;
+    nextSensorIdRef.current += 1;
+
+    // 1. Tell sensor_sim to spawn a new virtual sensor
+    publish("irrigation/command/create", {
+      sensor_id: sensorId,
+      baseline: Math.round(350 + Math.random() * 300), // random baseline 350–650
+    });
+
+    // 2. Pre-place it on the map at the clicked position
+    storeRef.current.setSensorPosition(sensorId, lat, lng);
+    refreshFromStore();
+
+    setEditMode("none");
+    console.log(`[frontend] Created sensor ${sensorId} at (${lat.toFixed(4)}, ${lng.toFixed(4)})`);
+  }, [publish, refreshFromStore]);
+
   const selectedBlock: Block | undefined = blocks.find(
     (b) => b.id === selectedBlockId
   );
@@ -56,6 +101,9 @@ export default function Home() {
         layerMode={layerMode}
         selectedBlockId={selectedBlockId}
         onBlockSelect={setSelectedBlockId}
+        editMode={editMode}
+        onSensorMove={handleSensorMove}
+        onSensorAdd={handleSensorAdd}
       />
 
       <TopControls
@@ -92,6 +140,12 @@ export default function Home() {
           onClose={() => setSelectedBlockId(null)}
         />
       )}
+
+      <SensorControls
+        editMode={editMode}
+        onEditModeChange={setEditMode}
+        sensorCount={sensors.length}
+      />
 
       <ChatBot />
     </div>

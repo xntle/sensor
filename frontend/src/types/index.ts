@@ -8,7 +8,7 @@ export type RiskFlag =
   | "calibration_due";
 
 export type SensorType = "soil" | "weather";
-export type SensorStatus = "online" | "offline";
+export type SensorStatus = "online" | "offline" | "pending";
 
 export type LayerMode = "decision" | "moisture" | "confidence" | "health";
 export type TimeRange = "now" | "6h" | "24h";
