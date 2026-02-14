@@ -5,6 +5,7 @@ import MapView from "@/components/Map";
 import TopControls from "@/components/TopControls";
 import Legend from "@/components/Legend";
 import BlockPanel from "@/components/BlockPanel";
+import ChatBot from "@/components/ChatBot";
 import type { LayerMode, TimeRange, Block, Sensor, Reading } from "@/types";
 import { blocks as mockBlocks, sensors as mockSensors, readings as mockReadings } from "@/data/mock";
 import { useMQTT } from "@/hooks/useMQTT";
@@ -91,6 +92,8 @@ export default function Home() {
           onClose={() => setSelectedBlockId(null)}
         />
       )}
+
+      <ChatBot />
     </div>
   );
 }

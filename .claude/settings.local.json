@@ -6,7 +6,9 @@
       "Bash(npx tsc:*)",
       "Bash(npm run build:*)",
       "WebSearch",
-      "Bash(npm install:*)"
+      "Bash(npm install:*)",
+      "Bash(node:*)",
+      "Bash(git add:*)"
     ]
   }
 }
