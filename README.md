@@ -1,5 +1,7 @@
 # 🌱 Irrigation Sensor Simulation Pipeline
 
+HOSTED: http://158.69.206.50:3000
+
 Mac simulates 10 soil-moisture sensors + a mesh hub.
 VPS runs MQTT broker + real-time signal processing.
 
