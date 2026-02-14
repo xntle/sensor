@@ -2,15 +2,15 @@
 
 import { useRef, useEffect, useCallback } from "react";
 import mapboxgl from "mapbox-gl";
-import type { LayerMode } from "@/types";
+import type { LayerMode, Block, Sensor } from "@/types";
 import {
-  blocks,
-  sensors,
   blocksToGeoJSON,
   sensorsToGeoJSON,
 } from "@/data/mock";
 
 interface MapProps {
+  blocks: Block[];
+  sensors: Sensor[];
   layerMode: LayerMode;
   onBlockSelect: (blockId: string | null) => void;
   selectedBlockId: string | null;
@@ -74,6 +74,8 @@ function getFillOpacity(mode: LayerMode): mapboxgl.Expression | number {
 }
 
 export default function MapView({
+  blocks,
+  sensors,
   layerMode,
   onBlockSelect,
   selectedBlockId,
@@ -267,6 +269,20 @@ export default function MapView({
       // Layer may not be ready yet
     }
   }, [layerMode]);
+
+  // Update GeoJSON sources when blocks/sensors change (live data)
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !map.isStyleLoaded()) return;
+    try {
+      const blocksSrc = map.getSource("blocks") as mapboxgl.GeoJSONSource | undefined;
+      if (blocksSrc) blocksSrc.setData(blocksToGeoJSON(blocks));
+      const sensorsSrc = map.getSource("sensors") as mapboxgl.GeoJSONSource | undefined;
+      if (sensorsSrc) sensorsSrc.setData(sensorsToGeoJSON(sensors));
+    } catch {
+      // Sources may not be ready yet
+    }
+  }, [blocks, sensors]);
 
   // Update selected block highlight
   useEffect(() => {

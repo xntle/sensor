@@ -12,6 +12,7 @@
     "@types/mapbox-gl": "^3.4.1",
     "lucide-react": "^0.564.0",
     "mapbox-gl": "^3.18.1",
+    "mqtt": "^5.15.0",
     "next": "16.1.6",
     "react": "19.2.3",
     "react-dom": "19.2.3"
