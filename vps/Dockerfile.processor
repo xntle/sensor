@@ -1,0 +1,6 @@
+FROM python:3.12-slim
+ENV PYTHONUNBUFFERED=1
+WORKDIR /app
+COPY processor.py .
+RUN pip install --no-cache-dir paho-mqtt
+CMD ["python3", "processor.py", "--broker", "mosquitto"]

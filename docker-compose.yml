@@ -1,0 +1,29 @@
+# Mosquitto MQTT broker + signal processor
+# Deploy on VPS:  docker compose up -d --build
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: mosquitto
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./vps/mosquitto/config:/mosquitto/config:ro
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
+
+  processor:
+    build:
+      context: ./vps
+      dockerfile: Dockerfile.processor
+    container_name: processor
+    restart: unless-stopped
+    depends_on:
+      - mosquitto
+    command: ["python3", "processor.py", "--broker", "mosquitto"]
+
+volumes:
+  mosquitto_data:
+  mosquitto_log:
